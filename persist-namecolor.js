@@ -1,31 +1,25 @@
-/* SSN Persistent Name Color (theme-specific: highlight-chat / hl-name / hl-message)
-   - Persistent per user (localStorage)
-   - Command anywhere: "!namecolor <color>" or "@User !namecolor <color>"
-   - Hard override of name color via CSS !important
-*/
-
 (() => {
-  const STORE_KEY = "ssn_persist_namecolor_final_v1";
+  // ===== visible proof it loaded =====
+  const badge = document.createElement("div");
+  badge.textContent = "namecolor: ON";
+  badge.style.cssText = "position:fixed;left:6px;top:6px;z-index:999999;padding:4px 6px;font:12px/1.2 sans-serif;background:rgba(0,0,0,.6);color:#fff;border-radius:6px;";
+  document.documentElement.appendChild(badge);
 
-  // Accepts:
-  //   !namecolor hotpink
-  //   @Someone !namecolor #FF007F
+  const STORE_KEY = "ssn_persist_namecolor_final_v2";
   const CMD_RE = /!namecolor\s+(.+?)\s*$/i;
 
   const HIDE_COMMAND_LINE = true;
   const MAX_COLOR_LEN = 80;
 
-  // Load saved map
   let map = {};
   try { map = JSON.parse(localStorage.getItem(STORE_KEY) || "{}"); } catch (e) { map = {}; }
   const save = () => { try { localStorage.setItem(STORE_KEY, JSON.stringify(map)); } catch (e) {} };
 
-  // Build a stable per-platform key
   function userKeyFromRow(row) {
     const name = (row.getAttribute("data-chatname") || "").trim().toLowerCase();
     const src  = (row.getAttribute("data-source-type") || "unknown").trim().toLowerCase();
     if (!name) return null;
-    return `${src}:${name}`; // e.g. "youtube:@hackerjenn"
+    return `${src}:${name}`;
   }
 
   function normalizeColor(raw) {
@@ -45,11 +39,11 @@
     const nameEl = row.querySelector(".hl-name");
     if (!nameEl) return;
 
-    // Hard override (beats theme styles)
+    // Hard override
     nameEl.style.setProperty("color", color, "important");
     nameEl.style.setProperty("-webkit-text-fill-color", color, "important");
 
-    // Sometimes badges/nested spans inherit differently; force all children too
+    // Force children too (badges/icons)
     nameEl.querySelectorAll("*").forEach(el => {
       el.style.setProperty("color", color, "important");
       el.style.setProperty("-webkit-text-fill-color", color, "important");
@@ -57,10 +51,11 @@
   }
 
   function handleCommand(row) {
+    // Some themes put the command in hl-message, some in overall text;
+    // prefer hl-message but fallback to whole row.
     const msgEl = row.querySelector(".hl-message");
-    if (!msgEl) return false;
+    const txt = ((msgEl?.textContent || row.textContent) || "").trim();
 
-    const txt = (msgEl.textContent || "").trim();
     const m = txt.match(CMD_RE);
     if (!m) return false;
 
@@ -73,10 +68,7 @@
     map[key] = picked;
     save();
 
-    if (HIDE_COMMAND_LINE) {
-      row.style.setProperty("display", "none", "important");
-    }
-
+    if (HIDE_COMMAND_LINE) row.style.setProperty("display", "none", "important");
     return true;
   }
 
@@ -84,10 +76,7 @@
     if (!(row instanceof Element)) return;
     if (!row.classList.contains("highlight-chat")) return;
 
-    // Save if command
     handleCommand(row);
-
-    // Always override afterwards
     forceApply(row);
   }
 
@@ -99,7 +88,6 @@
     for (const mu of muts) {
       for (const node of mu.addedNodes) {
         if (!(node instanceof Element)) continue;
-
         if (node.classList?.contains("highlight-chat")) processRow(node);
         node.querySelectorAll?.(".highlight-chat")?.forEach(processRow);
       }
