@@ -1,41 +1,31 @@
-/* SSN Persistent Name Color - DOM override (works even if SSN internals differ)
-   Command can appear anywhere in the line:
-     @User !namecolor hotpink
-     !namecolor #ff66cc
+/* SSN Persistent Name Color (theme-specific: highlight-chat / hl-name / hl-message)
+   - Persistent per user (localStorage)
+   - Command anywhere: "!namecolor <color>" or "@User !namecolor <color>"
+   - Hard override of name color via CSS !important
 */
 
 (() => {
-  const STORE_KEY = "ssn_namecolor_dom_v3";
-  const CMD_RE = /!namecolor\s+(.+?)\s*$/i; // grab everything after !namecolor until end
+  const STORE_KEY = "ssn_persist_namecolor_final_v1";
+
+  // Accepts:
+  //   !namecolor hotpink
+  //   @Someone !namecolor #FF007F
+  const CMD_RE = /!namecolor\s+(.+?)\s*$/i;
+
   const HIDE_COMMAND_LINE = true;
   const MAX_COLOR_LEN = 80;
 
-  // Load saved colors
+  // Load saved map
   let map = {};
   try { map = JSON.parse(localStorage.getItem(STORE_KEY) || "{}"); } catch (e) { map = {}; }
   const save = () => { try { localStorage.setItem(STORE_KEY, JSON.stringify(map)); } catch (e) {} };
 
-  // Find the username element by heuristic: first element whose trimmed text starts with "@"
-  function findUserEl(row) {
-    const walker = document.createTreeWalker(row, NodeFilter.SHOW_ELEMENT, null);
-    let el = row;
-    while (el) {
-      const txt = (el.textContent || "").trim();
-      // username in your screenshot looks like "@HackerJenn" (no spaces)
-      if (txt.startsWith("@") && txt.length >= 2 && txt.length <= 40 && !txt.includes(" ")) {
-        return el;
-      }
-      el = walker.nextNode();
-    }
-    return null;
-  }
-
-  function getUserKey(row) {
-    const userEl = findUserEl(row);
-    if (!userEl) return null;
-    const name = (userEl.textContent || "").trim().toLowerCase();
-    if (!name.startsWith("@")) return null;
-    return name; // keep it simple: "@hackerjenn"
+  // Build a stable per-platform key
+  function userKeyFromRow(row) {
+    const name = (row.getAttribute("data-chatname") || "").trim().toLowerCase();
+    const src  = (row.getAttribute("data-source-type") || "unknown").trim().toLowerCase();
+    if (!name) return null;
+    return `${src}:${name}`; // e.g. "youtube:@hackerjenn"
   }
 
   function normalizeColor(raw) {
@@ -45,70 +35,79 @@
     return c;
   }
 
-  function forceColor(row) {
-    const userEl = findUserEl(row);
-    const key = getUserKey(row);
-    if (!userEl || !key) return;
+  function forceApply(row) {
+    const key = userKeyFromRow(row);
+    if (!key) return;
 
     const color = map[key];
     if (!color) return;
 
-    // Hard override
-    userEl.style.setProperty("color", color, "important");
-    // Also override nested spans/links inside the username
-    userEl.querySelectorAll("*").forEach(child => {
-      child.style.setProperty("color", color, "important");
+    const nameEl = row.querySelector(".hl-name");
+    if (!nameEl) return;
+
+    // Hard override (beats theme styles)
+    nameEl.style.setProperty("color", color, "important");
+    nameEl.style.setProperty("-webkit-text-fill-color", color, "important");
+
+    // Sometimes badges/nested spans inherit differently; force all children too
+    nameEl.querySelectorAll("*").forEach(el => {
+      el.style.setProperty("color", color, "important");
+      el.style.setProperty("-webkit-text-fill-color", color, "important");
     });
   }
 
   function handleCommand(row) {
-    const key = getUserKey(row);
-    if (!key) return false;
+    const msgEl = row.querySelector(".hl-message");
+    if (!msgEl) return false;
 
-    const line = (row.textContent || "").trim();
-    const m = line.match(CMD_RE);
+    const txt = (msgEl.textContent || "").trim();
+    const m = txt.match(CMD_RE);
     if (!m) return false;
 
     const picked = normalizeColor(m[1]);
     if (!picked) return false;
 
+    const key = userKeyFromRow(row);
+    if (!key) return false;
+
     map[key] = picked;
     save();
-
-    // Apply immediately
-    forceColor(row);
 
     if (HIDE_COMMAND_LINE) {
       row.style.setProperty("display", "none", "important");
     }
+
     return true;
   }
 
   function processRow(row) {
     if (!(row instanceof Element)) return;
+    if (!row.classList.contains("highlight-chat")) return;
 
-    // First: if it contains a command, store it (and optionally hide it)
+    // Save if command
     handleCommand(row);
 
-    // Always: force saved color onto the username
-    forceColor(row);
+    // Always override afterwards
+    forceApply(row);
   }
 
-  // Observe for new chat rows
+  // Initial pass
+  document.querySelectorAll(".highlight-chat").forEach(processRow);
+
+  // Watch for new rows
   const obs = new MutationObserver(muts => {
     for (const mu of muts) {
       for (const node of mu.addedNodes) {
         if (!(node instanceof Element)) continue;
-        processRow(node);
-        node.querySelectorAll?.("*")?.forEach(processRow);
+
+        if (node.classList?.contains("highlight-chat")) processRow(node);
+        node.querySelectorAll?.(".highlight-chat")?.forEach(processRow);
       }
     }
   });
 
-  obs.observe(document.documentElement, { childList: true, subtree: true });
-
-  // Initial pass for already-rendered lines
-  document.querySelectorAll("*").forEach(processRow);
+  const out = document.getElementById("output") || document.documentElement;
+  obs.observe(out, { childList: true, subtree: true });
 
   // Debug helpers
   window.__ssnNameColorDump = () => ({ ...map });
