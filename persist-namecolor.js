@@ -1,101 +1,72 @@
-/* SSN Persistent Name Color (DOM-based, hard override)
-   Command: !namecolor <css color>
-   Examples:
+/* SSN Persistent Name Color - DOM override (works even if SSN internals differ)
+   Command can appear anywhere in the line:
+     @User !namecolor hotpink
      !namecolor #ff66cc
-     !namecolor hotpink
-     !namecolor rgb(255,0,255)
 */
 
 (() => {
-  const STORE_KEY = "ssn_namecolor_dom_v1";
-  const COMMAND_RE = /(?:^|\s)!namecolor\s+(.+)\s*$/i;
-
-  const HIDE_COMMAND_LINE = true;  // set false if you want the command to show
+  const STORE_KEY = "ssn_namecolor_dom_v3";
+  const CMD_RE = /!namecolor\s+(.+?)\s*$/i; // grab everything after !namecolor until end
+  const HIDE_COMMAND_LINE = true;
   const MAX_COLOR_LEN = 80;
 
-  // Common username selectors across SSN themes (we try several)
-  const USER_SELECTORS = [
-    ".chatname", ".username", ".name", ".author", ".from", "[data-username]"
-  ];
-
-  // Common message text selectors across SSN themes (we try several)
-  const MSG_SELECTORS = [
-    ".message", ".chatmessage", ".text", ".msg", ".content"
-  ];
-
-  // Load/save map
+  // Load saved colors
   let map = {};
-  try { map = JSON.parse(localStorage.getItem(STORE_KEY) || "{}"); } catch (e) {}
+  try { map = JSON.parse(localStorage.getItem(STORE_KEY) || "{}"); } catch (e) { map = {}; }
   const save = () => { try { localStorage.setItem(STORE_KEY, JSON.stringify(map)); } catch (e) {} };
 
-  // Helper: find first matching element under root
-  const findFirst = (root, selectors) => {
-    for (const sel of selectors) {
-      const el = root.querySelector(sel);
-      if (el) return el;
+  // Find the username element by heuristic: first element whose trimmed text starts with "@"
+  function findUserEl(row) {
+    const walker = document.createTreeWalker(row, NodeFilter.SHOW_ELEMENT, null);
+    let el = row;
+    while (el) {
+      const txt = (el.textContent || "").trim();
+      // username in your screenshot looks like "@HackerJenn" (no spaces)
+      if (txt.startsWith("@") && txt.length >= 2 && txt.length <= 40 && !txt.includes(" ")) {
+        return el;
+      }
+      el = walker.nextNode();
     }
     return null;
-  };
+  }
 
-  // Extract a stable-ish user key (platform + username)
-  const getUserKey = (rowEl) => {
-    const userEl = findFirst(rowEl, USER_SELECTORS);
+  function getUserKey(row) {
+    const userEl = findUserEl(row);
     if (!userEl) return null;
+    const name = (userEl.textContent || "").trim().toLowerCase();
+    if (!name.startsWith("@")) return null;
+    return name; // keep it simple: "@hackerjenn"
+  }
 
-    const rawName =
-      (userEl.getAttribute("data-username") || userEl.textContent || "").trim();
-    if (!rawName) return null;
+  function normalizeColor(raw) {
+    if (!raw) return null;
+    const c = String(raw).trim();
+    if (!c || c.length > MAX_COLOR_LEN) return null;
+    return c;
+  }
 
-    // Best-effort platform id from attributes/classes
-    const platform =
-      (rowEl.getAttribute("data-type") ||
-       rowEl.getAttribute("data-platform") ||
-       rowEl.className.match(/\b(youtube|twitch|kick|tiktok)\b/i)?.[1] ||
-       "unknown").toLowerCase();
-
-    return `${platform}:${rawName.toLowerCase()}`;
-  };
-
-  const normalizeColor = (c) => {
-    if (!c) return null;
-    const v = String(c).trim();
-    if (!v || v.length > MAX_COLOR_LEN) return null;
-    return v;
-  };
-
-  const getMessageText = (rowEl) => {
-    const msgEl = findFirst(rowEl, MSG_SELECTORS);
-    const txt = (msgEl?.textContent || "").trim();
-    return txt || null;
-  };
-
-  const applyColorToRow = (rowEl) => {
-    const key = getUserKey(rowEl);
-    if (!key) return;
+  function forceColor(row) {
+    const userEl = findUserEl(row);
+    const key = getUserKey(row);
+    if (!userEl || !key) return;
 
     const color = map[key];
     if (!color) return;
 
-    const userEl = findFirst(rowEl, USER_SELECTORS);
-    if (!userEl) return;
-
-    // Hard override: color + (often needed) text-shadow reset
+    // Hard override
     userEl.style.setProperty("color", color, "important");
-
-    // Some themes color via nested spans/links too
-    for (const child of userEl.querySelectorAll("*")) {
+    // Also override nested spans/links inside the username
+    userEl.querySelectorAll("*").forEach(child => {
       child.style.setProperty("color", color, "important");
-    }
-  };
+    });
+  }
 
-  const handleCommandIfPresent = (rowEl) => {
-    const key = getUserKey(rowEl);
+  function handleCommand(row) {
+    const key = getUserKey(row);
     if (!key) return false;
 
-    const msg = getMessageText(rowEl);
-    if (!msg) return false;
-
-    const m = msg.match(COMMAND_RE);
+    const line = (row.textContent || "").trim();
+    const m = line.match(CMD_RE);
     if (!m) return false;
 
     const picked = normalizeColor(m[1]);
@@ -105,33 +76,30 @@
     save();
 
     // Apply immediately
-    applyColorToRow(rowEl);
+    forceColor(row);
 
-    // Hide the command line if desired
     if (HIDE_COMMAND_LINE) {
-      rowEl.style.setProperty("display", "none", "important");
+      row.style.setProperty("display", "none", "important");
     }
-
     return true;
-  };
+  }
 
-  // Process a row: save command if it is one, then always force color
-  const processRow = (rowEl) => {
-    if (!(rowEl instanceof Element)) return;
+  function processRow(row) {
+    if (!(row instanceof Element)) return;
 
-    // Some themes wrap rows differently; try to handle both row and its children
-    handleCommandIfPresent(rowEl);
-    applyColorToRow(rowEl);
-  };
+    // First: if it contains a command, store it (and optionally hide it)
+    handleCommand(row);
 
-  // Observe the whole document for new chat lines
-  const obs = new MutationObserver((mutations) => {
-    for (const mu of mutations) {
+    // Always: force saved color onto the username
+    forceColor(row);
+  }
+
+  // Observe for new chat rows
+  const obs = new MutationObserver(muts => {
+    for (const mu of muts) {
       for (const node of mu.addedNodes) {
         if (!(node instanceof Element)) continue;
         processRow(node);
-
-        // Also process any descendants that might be chat rows
         node.querySelectorAll?.("*")?.forEach(processRow);
       }
     }
@@ -139,7 +107,7 @@
 
   obs.observe(document.documentElement, { childList: true, subtree: true });
 
-  // Initial pass (if chat already on screen)
+  // Initial pass for already-rendered lines
   document.querySelectorAll("*").forEach(processRow);
 
   // Debug helpers
